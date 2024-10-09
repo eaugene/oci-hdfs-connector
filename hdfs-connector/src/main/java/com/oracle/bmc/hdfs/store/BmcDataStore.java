@@ -92,7 +92,7 @@ import org.apache.hadoop.util.Progressable;
  * Statistics are updated only on successful operations, and not on attempted operations.
  */
 @Slf4j
-public class BmcDataStore {
+public class BmcDataStore implements AutoCloseable{
     private static final int ERROR_CODE_FILE_EXISTS = 412;
 
     private static final int MiB = 1024 * 1024;
@@ -724,6 +724,37 @@ public class BmcDataStore {
             renameResponses.add(new RenameResponse(objectToRename, newObjectName, futureResponse));
         }
         awaitRenameOperationTermination(renameResponses);
+    }
+
+    @Override
+    public void close() {
+        /*
+        To close the executor Services to avoid thread leaking causing OOM
+         */
+        closeExecutorService(this.parallelDownloadExecutor, 600, TimeUnit.SECONDS);
+        closeExecutorService(this.parallelUploadExecutor, 600, TimeUnit.SECONDS);
+        closeExecutorService(this.parallelRenameExecutor, 600, TimeUnit.SECONDS);
+        closeExecutorService(this.parallelMd5executor, 600, TimeUnit.SECONDS);
+    }
+
+    private void closeExecutorService(ExecutorService executorService,long timeOut,TimeUnit timeUnitOfTimeout) {
+        executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(timeOut, timeUnitOfTimeout)) {
+                LOG.warn("ExecutorService did not terminate within the specified timeout {} {}",timeOut,timeUnitOfTimeout);
+            }
+        } catch (InterruptedException e) {
+            LOG.error("Current Thread was interrupted while awaiting termination of ExecutorService.", e);
+            /* set back the interrupt status .
+            Ref : https://docs.oracle.com/javase/tutorial/essential/concurrency/interrupt.html */
+            Thread.currentThread().interrupt();
+        } finally {
+            // In both cases (timeout or interrupted), force shutdown
+            if (!executorService.isTerminated()) {
+                LOG.warn("Forcing shutdown of ExecutorService by sending interrupt to threads in Exec service ");
+                executorService.shutdownNow();
+            }
+        }
     }
 
     @RequiredArgsConstructor
